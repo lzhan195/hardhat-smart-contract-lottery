@@ -4,13 +4,14 @@ pragma solidity ^0.8.7;
 
 import "@chainlink/contracts/src/v0.8/VRFConsumerBaseV2.sol";
 import "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
-import "@chainlink/contracts/src/v0.8/interfaces/KeeperCompatiableInterface.sol";
+import "@chainlink/contracts/src/v0.8/interfaces/KeeperCompatibleInterface.sol";
 
 error Lottery_NotEnoughETHEntered();
 error Lottery_TransferFailed();
 error Lottery_NotOpen();
+error Lottery_UpkeepNotNeeded(uint256 currentBalance, uint256 numPlayers, uint256 lotteryState);
 
-contract Lottery is VRFConsumerBaseV2, KeeperCompatiableInterface {
+contract Lottery is VRFConsumerBaseV2, KeeperCompatibleInterface {
     /* Type Declarations */
     enum LotteryState {
         OPEN,
@@ -73,9 +74,9 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatiableInterface {
 
     /* @dev This is the function thta the Chainlink Keeper nodes call 
     they look for the `upkeepNeeded` to return true */
-    function checkUpKeep(
-        bytes calldata /*checkData*/
-    ) external override returns (bool upkeepNeeded, bytes memory /*performData*/) {
+    function checkUpkeep(
+        bytes memory /*checkData*/
+    ) public view override returns (bool upkeepNeeded, bytes memory /*performData*/) {
         bool isOpen = (LotteryState.OPEN == s_lotteryState);
         bool timePassed = ((block.timestamp - s_lastTimeStamp) > i_interval);
         bool hasPlayers = (s_players.length > 0);
@@ -83,7 +84,15 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatiableInterface {
         upkeepNeeded = (isOpen && timePassed && hasPlayers && hasBalance);
     }
 
-    function requestRandomWinner() external {
+    function performUpkeep(bytes calldata /*performData*/) external override {
+        (bool upkeepNeeded, ) = checkUpkeep("");
+        if (!upkeepNeeded) {
+            revert Lottery_UpkeepNotNeeded(
+                address(this).balance,
+                s_players.length,
+                uint256(s_lotteryState)
+            );
+        }
         //Resquest the random number
         //Once get it, do something
         s_lotteryState = LotteryState.CALCULATING;
@@ -106,6 +115,7 @@ contract Lottery is VRFConsumerBaseV2, KeeperCompatiableInterface {
         s_recentWinner = recentWinner;
         s_lotteryState = LotteryState.OPEN;
         s_players = new address payable[](0);
+        s_lastTimeStamp = block.timestamp;
         (bool success, ) = recentWinner.call{value: address(this).balance}("");
         // require(success)
         if (!success) {
