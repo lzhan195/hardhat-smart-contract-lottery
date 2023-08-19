@@ -1,18 +1,18 @@
 const { network, getNamedAccounts, ethers } = require("hardhat");
 const { developmentChains, networkConfig } = require("../../helper-hardhat-config");
-const { assert, expect, AssertionError } = require("chai");
+const { assert, expect } = require("chai");
 
 !developmentChains.includes(network.name)
     ? describe.skip
     : describe("Lottery Unit Tests", function () {
-        let lottery, VRFCoordinatorV2Mock, lotteryEntranceFee, deployer, interval
+        let lottery, vrfCoordinatorV2Mock, lotteryEntranceFee, deployer, interval
         const chainId = network.config.chainId
 
         beforeEach(async function () {
             deployer = (await getNamedAccounts()).deployer
             await deployments.fixture(["all"])
             lottery = await ethers.getContract("Lottery", deployer)
-            VRFCoordinatorV2Mock = await ethers.getContract("VRFCoordinatorV2Mock", deployer)
+            vrfCoordinatorV2Mock = await ethers.getContract("VRFCoordinatorV2Mock", deployer)
             lotteryEntranceFee = await lottery.getEntranceFee()
             interval = await lottery.getInterval()
         })
@@ -90,7 +90,6 @@ const { assert, expect, AssertionError } = require("chai");
                 await network.provider.send("evm_increaseTime", [interval.toNumber() + 1])
                 await network.provider.send("evm_mine", [])
                 const tx = await lottery.performUpkeep([])
-                console.log(tx)
                 assert(tx)
             })
             it("reverts when checkupkeep is false", async function () {
@@ -117,14 +116,18 @@ const { assert, expect, AssertionError } = require("chai");
                 await network.provider.send("evm_mine", [])
             })
             it("can only be called after performUpkeep", async function () {
-                await expect(VRFCoordinatorV2Mock.fulfillRandomWords(0, lottery.address)).to.be.revertedWith("nonexistent request")
-                await expect(VRFCoordinatorV2Mock.fulfillRandomWords(1, lottery.address)).to.be.revertedWith("nonexistent request")
+                await expect(vrfCoordinatorV2Mock.fulfillRandomWords(0, lottery.address)).to.be.revertedWith("nonexistent request")
+                await expect(vrfCoordinatorV2Mock.fulfillRandomWords(1, lottery.address)).to.be.revertedWith("nonexistent request")
             })
             // BIG TEST
             it("picks a winner, resets the lottery, and sends money", async function () {
                 const additionalEntrants = 3
-                const startingAccountIndex = 1
-                for (let i = startingAccountIndex; i < startingAccountIndex + additionalEntrants; i++) {
+                const startingAccountIndex = 2
+                const accounts = await ethers.getSigners()
+                for (let i = startingAccountIndex;
+                    i < startingAccountIndex + additionalEntrants;
+                    i++
+                ) {
                     const accountConnectedLottery = lottery.connect(accounts[i])
                     await accountConnectedLottery.enterLottery({ value: lotteryEntranceFee })
                 }
@@ -134,14 +137,14 @@ const { assert, expect, AssertionError } = require("chai");
                 //fulfillRandomWords (mock being the chainlink vrf)
                 //we will have to wait for the fulfilRandomWords to be called
                 await new Promise(async (resolve, reject) => {
-                    lottery.once("winnerPicked", async () => {
+                    lottery.once("WinnerPicked", async () => {
                         console.log("Found the event!")
                         try {
                             const recentWinner = await lottery.getRecentWinner()
                             const lotteryState = await lottery.getLotteryState()
                             const endingTimeStamp = await lottery.getLastTimeStamp()
                             const numPlayers = await lottery.getNumberOfPlayers()
-                            const winnerEndingBalance = await accounts[1].getBalance()
+                            const winnerEndingBalance = await accounts[2].getBalance()
                             assert.equal(numPlayers.toString(), "0")
                             assert.equal(lotteryState.toString(), "0")
                             assert(endingTimeStamp > startingTimeStamp)
@@ -164,8 +167,8 @@ const { assert, expect, AssertionError } = require("chai");
                     //below, we will fire the event, and the listener will pick it up, and resolve
                     const tx = await lottery.performUpkeep([])
                     const txReceipt = await tx.wait(1)
-                    const winnerStartingBalance = await accounts[1].getBalance()
-                    await VRFCoordinatorV2Mock.fulfillRandomWords(
+                    const winnerStartingBalance = await accounts[2].getBalance()
+                    await vrfCoordinatorV2Mock.fulfillRandomWords(
                         txReceipt.events[1].args.requestId,
                         lottery.address
                     )
